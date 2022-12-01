@@ -1,0 +1,12 @@
+target/
+server/libraries/
+server/logs/
+server/versions/
+server/world/
+server/banned-ips.json
+server/banned-players.json
+server/eula.txt
+server/ops.json
+server/usercache.json
+server/whitelist.json
+
