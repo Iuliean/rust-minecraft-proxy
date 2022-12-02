@@ -9,4 +9,4 @@ server/eula.txt
 server/ops.json
 server/usercache.json
 server/whitelist.json
-
+out.txt

@@ -1,19 +1,14 @@
 
 use crate::utils;
+use crate::utils::Client::LoginStart;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use utils::{Packet, read_var_int};
-use utils::Client::{HandshakePacket, StatusPacketId};
-use num_traits::FromPrimitive;
+use utils::{Packet, State,read_var_int};
+use utils::Client::{HandshakePacket, StatusPacketId, LoginPacketId};
 
-#[derive(Copy,Clone, num_derive::FromPrimitive)]
-enum State{
-    Status = 1,
-    Login = 2,
-    Play = 3
-}
+
 
 trait HandshakeConnection {
     fn input(&self) -> &TcpStream;
@@ -35,7 +30,8 @@ trait HandshakeConnection {
         match state{
             State::Status => self.on_status(buff),
             State::Login => self.on_login(buff),
-            State::Play => self.on_play(buff)
+            State::Play => self.on_play(buff),
+            State::Unknown =>self.log(String::from("Warning!!!! State is Unknonwn. Warning!!!!!"))
         }
     }
 
@@ -47,6 +43,7 @@ trait HandshakeConnection {
             {
                 let bytes_read = input.read(&mut buff).unwrap();
                 if bytes_read != 0 {
+                    //self.log(format!("Received: {:?}", buff));
                     match utils::tokenize_to_packets(&buff[..bytes_read]){
                         Ok(tokens) => self.execute(tokens),
                         Err(e) => self.log(format!("{}", e))
@@ -94,18 +91,46 @@ impl HandshakeConnection for M2P {
     }
 
     fn on_status(&self, buff: Vec<&[u8]>){
-        for packet in buff.iter(){
-            let id = packet[0];
+        for packet in buff{
+            let id = StatusPacketId::from_u8(&packet[0]);
             let packet = &packet[1..];
-            self.log(format!("Packet id: {:#02x}",id));
+            self.log(format!("Packet id: {:#02x}",id as u8));
+            match id {
+                    StatusPacketId::Handshake =>{
+                        match HandshakePacket::parse(packet){
+                            Ok(parsed_value) => {
+                                self.log(parsed_value.make_string());
+                                self.set_state(State::from_u8(parsed_value.next_state as u8));
+                            },
+                            Err(e) => self.log(format!("Failed to parse HandshakePacket reason: {}", e))
+                        };
+                }
+                StatusPacketId::Unknown => self.log(format!("Unknown status packet id: {}", id as u8))
+            }
         }
     }
 
     fn on_login(&self, buff: Vec<&[u8]>){
-        println!("{:?}", buff);
+        for packet in buff{
+            let id = LoginPacketId::from_u8(&packet[0]);
+            let packet = &packet[1..];
+            match id{
+                LoginPacketId::Start =>{
+                    match LoginStart::parse(packet){
+                        Ok(parsed_value) => {
+                                self.log(parsed_value.make_string());
+                                self.set_state(State::Play);
+                        },
+                        Err(e) => self.log(format!("Failed to parse LoginStart packet reason: {}", e))
+                    }
+                }
+                LoginPacketId::Unknonwn => self.log(format!("Unknown login packet id:{}", id as u8))
+            }
+        }
     }
 
-    fn on_play(&self, _buff: Vec<&[u8]>){
+    fn on_play(&self, buff: Vec<&[u8]>){
+        self.log(format!("Client sent {} packets: {:?}", buff.len(), buff));
     }
 }
 
@@ -129,11 +154,11 @@ impl HandshakeConnection for S2P {
     }
     
     fn log(&self, message: String){
-        println!("[S2P]:{message}");
+        //println!("[S2P]:{message}");
     }
 
     fn on_status(&self, buff: Vec<&[u8]>){
-        for packet in buff.iter(){
+        for packet in buff{
             let id = packet[0];
             let packet = &packet[1..];
             self.log(format!("Packet id: {:#02x}",id));
@@ -160,7 +185,7 @@ impl Proxy {
             .expect("Cannot bind to default address: 0.0.0.0:25565");
         let mc = mc_listener.accept().unwrap().0;
         let server =
-            TcpStream::connect("0.0.0.0:25566").expect("Failed to connect to: localhost:25566");
+            TcpStream::connect("localhost:25566").expect("Failed to connect to: localhost:25566");
         let mc_clone = mc.try_clone().unwrap();
         let server_clone = server.try_clone().unwrap();
         let state = Arc::from(Mutex::from(State::Status));
