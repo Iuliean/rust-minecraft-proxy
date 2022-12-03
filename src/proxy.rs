@@ -1,12 +1,12 @@
 
 use crate::utils;
-use crate::utils::Client::LoginStart;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use utils::{Packet, State,read_var_int};
-use utils::Client::{HandshakePacket, StatusPacketId, LoginPacketId};
+use utils::{State};
+use crate::packets::Packet;
+use crate::packets::Client::*;
 
 
 
@@ -46,7 +46,7 @@ trait HandshakeConnection {
                     //self.log(format!("Received: {:?}", buff));
                     match utils::tokenize_to_packets(&buff[..bytes_read]){
                         Ok(tokens) => self.execute(tokens),
-                        Err(e) => self.log(format!("{}", e))
+                        Err(e) => self.log(format!("{}", e.kind()))
                     }
                     output.write_all(&buff[..bytes_read]).unwrap();
                 }
@@ -87,15 +87,14 @@ impl HandshakeConnection for M2P {
     }
     
     fn log(&self, message: String){
-        println!("[M2P]:{message}");
+        println!("[M2P]: Client sent: {message}");
     }
 
     fn on_status(&self, buff: Vec<&[u8]>){
         for packet in buff{
-            let id = StatusPacketId::from_u8(&packet[0]);
+            let id = &packet[0];
             let packet = &packet[1..];
-            self.log(format!("Packet id: {:#02x}",id as u8));
-            match id {
+            match StatusPacketId::from_u8(id) {
                     StatusPacketId::Handshake =>{
                         match HandshakePacket::parse(packet){
                             Ok(parsed_value) => {
@@ -105,16 +104,16 @@ impl HandshakeConnection for M2P {
                             Err(e) => self.log(format!("Failed to parse HandshakePacket reason: {}", e))
                         };
                 }
-                StatusPacketId::Unknown => self.log(format!("Unknown status packet id: {}", id as u8))
+                StatusPacketId::Unknown => self.log(format!("Unknown status packet id: {:#02x}", id))
             }
         }
     }
 
     fn on_login(&self, buff: Vec<&[u8]>){
         for packet in buff{
-            let id = LoginPacketId::from_u8(&packet[0]);
+            let id = &packet[0];
             let packet = &packet[1..];
-            match id{
+            match LoginPacketId::from_u8(id){
                 LoginPacketId::Start =>{
                     match LoginStart::parse(packet){
                         Ok(parsed_value) => {
@@ -124,13 +123,35 @@ impl HandshakeConnection for M2P {
                         Err(e) => self.log(format!("Failed to parse LoginStart packet reason: {}", e))
                     }
                 }
-                LoginPacketId::Unknonwn => self.log(format!("Unknown login packet id:{}", id as u8))
+                LoginPacketId::Unknonwn => self.log(format!("Unknown login packet id:{:#02x}", id))
             }
         }
     }
 
     fn on_play(&self, buff: Vec<&[u8]>){
-        self.log(format!("Client sent {} packets: {:?}", buff.len(), buff));
+        for packet in buff{ 
+            let id = &packet[1];
+            let packet = &packet[2..];
+            match PlayPacketId::from_u8(id){
+                PlayPacketId::SetPlayerPosition =>{
+                    match SetPlayerPositionPacket::parse(packet){
+                        Ok(parsed_value) =>{
+                            self.log(parsed_value.make_string());
+                        },
+                        Err(e) => self.log(format!("Failed to Parse SetPlayerPosition reason: {}", e)) 
+                    }
+                },
+                PlayPacketId::SetPlayerRotation =>{
+                    match SetPlayerRotationPacket::parse(packet){
+                        Ok(parsed_value) =>{
+                            self.log(parsed_value.make_string());
+                        },
+                        Err(e) => self.log(format!("Failed to parse SetPlayerRotationPacket reason: {}", e))
+                    }
+                }
+                PlayPacketId::Unknonwn => self.log(format!("Unknown play packet id: {:#02x}", id))
+            }
+        }
     }
 }
 

@@ -1,5 +1,6 @@
 mod proxy;
 mod utils;
+mod packets;
 
 use proxy::Proxy;
 
