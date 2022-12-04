@@ -1,14 +1,13 @@
 
 use crate::utils;
+use std::cell::RefCell;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use utils::{State};
-use crate::packets::Packet;
-use crate::packets::Client::*;
-
-
+use crate::packets::{Packet, server};
+use crate::packets::client;
 
 trait HandshakeConnection {
     fn input(&self) -> &TcpStream;
@@ -31,7 +30,7 @@ trait HandshakeConnection {
             State::Status => self.on_status(buff),
             State::Login => self.on_login(buff),
             State::Play => self.on_play(buff),
-            State::Unknown =>self.log(String::from("Warning!!!! State is Unknonwn. Warning!!!!!"))
+            State::Unknown =>self.log("Warning!!!! State is Unknonwn. Warning!!!!!".to_string())
         }
     }
 
@@ -43,13 +42,13 @@ trait HandshakeConnection {
             {
                 let bytes_read = input.read(&mut buff).unwrap();
                 if bytes_read != 0 {
-                    //self.log(format!("Received: {:?}", buff));
                     match utils::tokenize_to_packets(&buff[..bytes_read]){
                         Ok(tokens) => self.execute(tokens),
-                        Err(e) => self.log(format!("{}", e.kind()))
+                        Err(_e) => ()
                     }
                     output.write_all(&buff[..bytes_read]).unwrap();
                 }
+                
             }
         }
     }
@@ -58,7 +57,8 @@ trait HandshakeConnection {
 struct M2P {
     input: TcpStream,
     output: TcpStream,
-    state: Arc<Mutex<State>>
+    login_packet_sent: RefCell<bool>,
+    state: Arc<Mutex<State>> 
 }
 
 struct S2P {
@@ -87,24 +87,24 @@ impl HandshakeConnection for M2P {
     }
     
     fn log(&self, message: String){
-        println!("[M2P]: Client sent: {message}");
+        println!("[M2P]:{message}");
     }
 
     fn on_status(&self, buff: Vec<&[u8]>){
         for packet in buff{
             let id = &packet[0];
             let packet = &packet[1..];
-            match StatusPacketId::from_u8(id) {
-                    StatusPacketId::Handshake =>{
-                        match HandshakePacket::parse(packet){
+            match client::StatusPacketId::from_u8(id) {
+                    client::StatusPacketId::Handshake =>{
+                        match client::HandshakePacket::parse(packet){
                             Ok(parsed_value) => {
                                 self.log(parsed_value.make_string());
-                                self.set_state(State::from_u8(parsed_value.next_state as u8));
+                                self.set_state( State::Login);
                             },
                             Err(e) => self.log(format!("Failed to parse HandshakePacket reason: {}", e))
                         };
                 }
-                StatusPacketId::Unknown => self.log(format!("Unknown status packet id: {:#02x}", id))
+                client::StatusPacketId::Unknown => self.log(format!("Unknown status packet id: {:#02x}", id))
             }
         }
     }
@@ -113,17 +113,19 @@ impl HandshakeConnection for M2P {
         for packet in buff{
             let id = &packet[0];
             let packet = &packet[1..];
-            match LoginPacketId::from_u8(id){
-                LoginPacketId::Start =>{
-                    match LoginStart::parse(packet){
-                        Ok(parsed_value) => {
-                                self.log(parsed_value.make_string());
-                                self.set_state(State::Play);
-                        },
-                        Err(e) => self.log(format!("Failed to parse LoginStart packet reason: {}", e))
+            match client::LoginPacketId::from_u8(id){
+                client::LoginPacketId::Start =>{
+                    if !*self.login_packet_sent.borrow(){
+                        match client::LoginStart::parse(packet){
+                            Ok(parsed_value) => {
+                                    *self.login_packet_sent.borrow_mut() = true;
+                                    self.log(parsed_value.make_string());
+                            },
+                            Err(e) => {self.log(format!("{:?}", packet));self.log(format!("Failed to parse LoginStart packet reason: {}", e))}
+                        }
                     }
                 }
-                LoginPacketId::Unknonwn => self.log(format!("Unknown login packet id:{:#02x}", id))
+                client::LoginPacketId::Unknonwn => self.log(format!("Unknown login packet id:{:#02x}", id))
             }
         }
     }
@@ -132,24 +134,38 @@ impl HandshakeConnection for M2P {
         for packet in buff{ 
             let id = &packet[1];
             let packet = &packet[2..];
-            match PlayPacketId::from_u8(id){
-                PlayPacketId::SetPlayerPosition =>{
-                    match SetPlayerPositionPacket::parse(packet){
+            match client::PlayPacketId::from_u8(id){
+                client::PlayPacketId::SetPlayerPosition =>{
+                    match client::SetPlayerPositionPacket::parse(packet){
                         Ok(parsed_value) =>{
                             self.log(parsed_value.make_string());
                         },
                         Err(e) => self.log(format!("Failed to Parse SetPlayerPosition reason: {}", e)) 
                     }
                 },
-                PlayPacketId::SetPlayerRotation =>{
-                    match SetPlayerRotationPacket::parse(packet){
+                client::PlayPacketId::SetPlayerRotation =>{
+                    match client::SetPlayerRotationPacket::parse(packet){
                         Ok(parsed_value) =>{
                             self.log(parsed_value.make_string());
                         },
                         Err(e) => self.log(format!("Failed to parse SetPlayerRotationPacket reason: {}", e))
                     }
+                },
+                client::PlayPacketId::KeepAlive => {
+                    match client::KeepAlivePacket::parse(packet){
+                        Ok(parsed_value) => {
+                            self.log(parsed_value.make_string())
+                        }
+                        Err(e) => self.log(format!("Failed to parse KeepAlive reason: {}" ,e))
+                    }
+                },
+                client::PlayPacketId::SetPLayerPosAndRot => match client::SetPlayerPosAndRotPacket::parse(packet) {
+                    Ok(parsed_value) => {
+                        self.log(parsed_value.make_string());
+                    }
+                    Err(e) => self.log(format!("Failed to parse SetPlayerPosAndRot reason: {}", e))
                 }
-                PlayPacketId::Unknonwn => self.log(format!("Unknown play packet id: {:#02x}", id))
+                client::PlayPacketId::Unknonwn => self.log(format!("Unknown play packet id: {:#02x}", id))
             }
         }
     }
@@ -175,23 +191,35 @@ impl HandshakeConnection for S2P {
     }
     
     fn log(&self, message: String){
-        //println!("[S2P]:{message}");
+        println!("[S2P]:{message}");
     }
 
-    fn on_status(&self, buff: Vec<&[u8]>){
-        for packet in buff{
-            let id = packet[0];
-            let packet = &packet[1..];
-            self.log(format!("Packet id: {:#02x}",id));
-        }
+    fn on_status(&self, _buff: Vec<&[u8]>){
+        self.log("Server on status".to_string());
     }
 
     fn on_login(&self, buff: Vec<&[u8]>){
-        //println!("{:?}", buff);  
+        for packet in buff{
+            let id = &packet[0];
+            let packet = &packet[1..];
+            match server::LoginPacketId::from_u8(*id){
+                server::LoginPacketId::LoginSuccess => {
+                    self.log("___________________Login Success___________________".to_string());
+                    self.set_state(State::Play)
+                },
+                server::LoginPacketId::Unknonwn => ()//self.log(format!("Unkown packet id: {}", id))
+            }
+        }
     }
 
-    fn on_play(&self, _buff: Vec<&[u8]>){
-        
+    fn on_play(&self, buff: Vec<&[u8]>){
+        for packet in buff{
+            let id = &packet[0];
+            let packet = &packet[1..];
+            if *id == 0x1C{
+                self.log("ChunkData".to_string());
+            }
+        }
     }
 }
 
@@ -215,7 +243,8 @@ impl Proxy {
             m2p: Arc::from(Mutex::from(M2P {
                 input: mc,
                 output: server,
-                state: state
+                state: state,
+                login_packet_sent: RefCell::new(false)   
             })),
             s2p: Arc::from(Mutex::from(S2P {
                 input: server_clone,

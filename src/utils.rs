@@ -20,7 +20,6 @@ impl State{
     }
 }
 
-
 pub fn read_var_int(buff: &mut impl ReadBytesExt)-> Result<i32, std::io::Error>{
     let mut value: i32 = 0;
     let mut pos: i32 = 0;    

@@ -1,10 +1,11 @@
 pub trait Packet{
     fn parse(buff: &[u8]) -> Result<Self, std::io::Error> where Self: Sized;
+    //fn as_bytes(&self) -> Vec<u8>; if used to deserialize packet to send to server / possible implementation to return sized [u8]
     fn make_string(&self) -> String;
 }
 
-pub mod Client{
-    use std::{io::{Cursor, ErrorKind,Error}, collections::btree_map::Values};
+pub mod client{
+    use std::io::{Cursor, ErrorKind,Error};
     use byteorder::{BigEndian, ReadBytesExt};
     use super::Packet;
     use crate::utils::{State, read_string_255, read_var_int};
@@ -40,15 +41,19 @@ pub mod Client{
         }
     }
     pub enum PlayPacketId{
-        SetPlayerPosition = 0x14,
-        SetPlayerRotation = 0x16,
+        KeepAlive           = 0x12,
+        SetPlayerPosition   = 0x14,
+        SetPLayerPosAndRot  = 0x15,
+        SetPlayerRotation   = 0x16,
         Unknonwn
     }
 
     impl PlayPacketId{
         pub fn from_u8(input: &u8) -> PlayPacketId{
             match input {
+                0x12 => Self::KeepAlive,
                 0x14 => Self::SetPlayerPosition,
+                0x15 => Self::SetPLayerPosAndRot,
                 0x16 => Self::SetPlayerRotation,
                 _ => Self::Unknonwn
             }
@@ -273,5 +278,92 @@ pub mod Client{
             format!("yaw:{:.2} pitch:{:.2} on_ground:{}", self.yaw, self.pitch, self.on_ground)
         }
     }
+
+    pub struct KeepAlivePacket{
+        id: i64
+    }
+
+    impl Packet for KeepAlivePacket{
+        fn parse(buff: &[u8]) -> Result<Self, std::io::Error> where Self: Sized {
+            let mut cr = Cursor::new(buff);
+            Ok(KeepAlivePacket {
+                id: match cr.read_i64::<BigEndian>(){
+                    Ok(value) => value,
+                    Err(e) => return Err(Error::new(e.kind(), format!("Failed to parse id reason: {}", e.to_string())))
+                }
+            })
+        }
+
+        fn make_string(&self) -> String {
+            format!("KEEP_ALIVE ID:{}", self.id)
+        }
+    }
     
+    pub struct SetPlayerPosAndRotPacket{
+        pos_x: f64,
+        pos_y: f64,
+        pos_z: f64,
+        yaw: f32,
+        pitch: f32,
+        on_ground: bool
+    }
+
+    impl Packet for SetPlayerPosAndRotPacket{
+        fn parse(buff: &[u8]) -> Result<Self, std::io::Error> where Self: Sized {
+            let mut cr = Cursor::new(buff);
+            let packet = SetPlayerPosAndRotPacket{
+                pos_x: match cr.read_f64::<BigEndian>(){
+                    Ok(value) => value,
+                    Err(e) => return Err(Error::new(e.kind(),
+                                                    format!("Failed to parse pos_x reason: {}", e.to_string())))
+                },
+                pos_y: match cr.read_f64::<BigEndian>(){
+                    Ok(value) => value,
+                    Err(e) => return Err(Error::new(e.kind(),
+                                                    format!("Failed to parse pos_y reason: {}", e.to_string())))
+                },
+                pos_z: match cr.read_f64::<BigEndian>(){
+                    Ok(value) => value,
+                    Err(e) => return Err(Error::new(e.kind(),
+                                                    format!("Failed to parse pos_z reason: {}", e.to_string())))
+                },
+                yaw: match cr.read_f32::<BigEndian>(){
+                    Ok(value) => value,
+                    Err(e) => return Err(Error::new(e.kind(),
+                                                    format!("Failed to parse yaw reason: {}", e.to_string())))
+                },
+                pitch: match cr.read_f32::<BigEndian>(){
+                    Ok(value) => value,
+                    Err(e) => return Err(Error::new(e.kind(),
+                                                    format!("Failed to parse pitch reason: {}", e.to_string())))
+                },
+                on_ground: match cr.read_u8(){
+                    Ok(value) => value == 0x01,
+                    Err(e) => return Err(Error::new(e.kind(),
+                                                    format!("Failed to parse on_ground reason: {}", e.to_string())))
+                }
+            };
+            Ok(packet)
+        }
+        fn make_string(&self) -> String{
+            format!("x:{:.2} y:{:.2} z:{:.2} yaw:{:.2} pitch:{:.2} on_ground:{}", self.pos_x, self.pos_y, self.pos_z, self.yaw ,self.pitch, self.on_ground)
+        }
+    }
+
+}
+
+pub mod server{
+    pub enum LoginPacketId{
+        LoginSuccess = 0x02,
+        Unknonwn
+    }
+
+    impl LoginPacketId{
+        pub fn from_u8(input: u8) -> LoginPacketId{
+            match input{
+                0x2 => Self::LoginSuccess,
+                _ => Self::Unknonwn
+            }
+        }
+    }
 }
